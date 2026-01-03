@@ -1,0 +1,10 @@
+{
+  "MODEL_PATH_CNN": "cnn_intent_fp32.tflite",
+  "MODEL_PATH_TREE": "gesture_tree.joblib",
+  "SMOOTHING_WINDOW": 14,
+  "MIDI_PORT_NAME": "AI Control 1",
+  "CAM_NUMBER": 0,
+  "IMG_SIZE": 160,
+  "CONF_THRESHOLD": 0.75,
+  "ORIENTATION" : "Portrait"
+}
