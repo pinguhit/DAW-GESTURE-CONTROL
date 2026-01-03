@@ -12,32 +12,30 @@ from config_loader import load_config
 # ---------------- CONFIG ----------------
 cfg = load_config()
 SMOOTHING_WINDOW = cfg["SMOOTHING_WINDOW"]
+ON_CONF = cfg["ON_THRES"]
+OFF_CONF = cfg["OFF_THRES"]
 PADDING_RATIO = 0.35
 COOLDOWN_SECONDS = 1.0
 
 MP_SKIP = 2   # MediaPipe runs every N frames
-
-## helper
-
-def point_in_box(x,y,x1,y1,x2,y2):
-    return x1<=x<=x2 and y1<=y<=y2
 
 
 class EngineWorker(QThread):
     gesture_signal = Signal(str)
     status_signal = Signal(str)
 
-    def __init__(self, cam_number,orientation):
+    def __init__(self, cam_number, orientation):
         super().__init__()
         self.cam_number = cam_number
-        self.running = True
         self.orientation = orientation
+        self.running = True
 
         self.label_window = deque(maxlen=SMOOTHING_WINDOW)
         self.last_trigger_time = 0.0
 
         self.frame_id = 0
         self.last_landmarks = None
+        self.prev_state = "NOTHING"   # FSM state
 
         self.mp_hands = mp.solutions.hands
         self.hands = self.mp_hands.Hands(
@@ -95,7 +93,6 @@ class EngineWorker(QThread):
         for p in hl.landmark:
             px = (p.x * w - x1) / (x2 - x1)
             py = (p.y * h - y1) / (y2 - y1)
-
             features.extend([
                 (px - wrist_px) / palm_size,
                 (py - wrist_py) / palm_size,
@@ -117,30 +114,20 @@ class EngineWorker(QThread):
 
         while self.running:
             ret, frame = cap.read()
-           
             if not ret:
                 continue
 
             self.frame_id += 1
             frame = cv2.flip(frame, 1)
-            #width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            #height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-            width = 640
-            height = 480
-
-            roi_width = width-20
-            roi_height = height-20
+            width, height = 640, 480
+            roi_width, roi_height = width - 20, height - 20
 
             if self.orientation == "Portrait":
-                 frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-                 temp = roi_width
-                 roi_width = roi_height
-                 roi_height = temp
-            
+                frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                roi_width, roi_height = roi_height, roi_width
 
-            cv2.rectangle(frame,(20,20),(roi_width,roi_height),(0,255,0),2)
-                
+            cv2.rectangle(frame, (20, 20), (roi_width, roi_height), (0, 255, 0), 2)
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             # ---- MediaPipe frame skipping ----
@@ -150,19 +137,16 @@ class EngineWorker(QThread):
             else:
                 results = None
 
-            best_gesture = "unknown"
-            best_gesture_conf = 0.0
-            any_intentional = False
-
-            # ---- GLOBAL INTENT STATE (TOP-LEFT) ----
-            global_intent = "NOTHING"
-            global_conf = 0.0
-
             landmarks_to_use = (
                 results.multi_hand_landmarks
                 if results and results.multi_hand_landmarks
                 else self.last_landmarks
             )
+
+            # ---------------- FRAME-LEVEL INTENT AGGREGATION ----------------
+            frame_has_intentional = False
+            frame_intentional_conf = 0.0
+            global_conf = 0.0
 
             if landmarks_to_use:
                 for hl in landmarks_to_use:
@@ -171,33 +155,45 @@ class EngineWorker(QThread):
                         continue
 
                     x1, y1, x2, y2 = bbox
-
-                    if(x1<20 or x2 > roi_width or y1 < 20 or y2>roi_height):
+                    if x1 < 20 or x2 > roi_width or y1 < 20 or y2 > roi_height:
                         continue
 
-
-                    # ---- CNN INTENT (HARD GATE) ----
                     intent, i_conf = predict_intent(crop)
+                    global_conf = max(global_conf, i_conf)
 
                     if intent == "intentional":
-                        any_intentional = True
-                        global_intent = "INTENTIONAL"
-                        global_conf = max(global_conf, i_conf)
-                    else:
-                        global_intent = "NOTHING"
-                        global_conf = max(global_conf, i_conf)
-                        continue   # 🔥 TREE HARD BLOCKED
+                        frame_has_intentional = True
+                        frame_intentional_conf = max(frame_intentional_conf, i_conf)
 
-                    # ---- TREE ----
+            # ---------------- HYSTERESIS FSM ----------------
+            if self.prev_state == "NOTHING":
+                if frame_has_intentional and frame_intentional_conf >= ON_CONF:
+                    self.prev_state = "INTENTIONAL"
+
+            elif self.prev_state == "INTENTIONAL":
+                if (not frame_has_intentional) or frame_intentional_conf < OFF_CONF:
+                    self.prev_state = "NOTHING"
+
+            # ---------------- TREE (ONLY IF INTENTIONAL) ----------------
+            best_gesture = "unknown"
+            best_gesture_conf = 0.0
+
+            if self.prev_state == "INTENTIONAL" and landmarks_to_use:
+                for hl in landmarks_to_use:
+                    crop, bbox = self.extract_hand_crop(frame, hl)
+                    if crop is None:
+                        continue
+
                     features = self.landmarks_to_features(hl, bbox, frame.shape)
-                    gesture, g_conf = predict_gesture_from_features(features)
+                    if features is None:
+                        continue
 
+                    gesture, g_conf = predict_gesture_from_features(features)
                     if g_conf > best_gesture_conf:
                         best_gesture = gesture
                         best_gesture_conf = g_conf
 
-                    # ---- Draw hand box ----
-                    #x1, y1, x2, y2 = bbox
+                    x1, y1, x2, y2 = bbox
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.putText(
                         frame,
@@ -209,11 +205,11 @@ class EngineWorker(QThread):
                         2
                     )
 
-            # ---- TOP-LEFT INTENT DISPLAY ----
-            color = (0, 255, 0) if global_intent == "INTENTIONAL" else (0, 0, 255)
+            # ---------------- UI ----------------
+            color = (0, 255, 0) if self.prev_state == "INTENTIONAL" else (0, 0, 255)
             cv2.putText(
                 frame,
-                f"INTENT: {global_intent} ({global_conf:.2f})",
+                f"INTENT: {self.prev_state} ({global_conf:.2f})",
                 (20, 40),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 1.0,
@@ -221,9 +217,11 @@ class EngineWorker(QThread):
                 2
             )
 
-            # ---- SMOOTHING ----
-            if any_intentional:
+            # ---------------- SMOOTHING ----------------
+            if self.prev_state == "INTENTIONAL":
                 self.label_window.append(best_gesture)
+            else:
+                self.label_window.clear()
 
             if len(self.label_window) == SMOOTHING_WINDOW:
                 now = time.time()
