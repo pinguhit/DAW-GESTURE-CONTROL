@@ -1,14 +1,21 @@
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    message="SymbolDatabase.GetPrototype() is deprecated"
+)
 import cv2
 import numpy as np
 import tensorflow as tf
 import joblib
+import math
 
 from config_loader import load_config
 
 # ---------------- CONFIG ----------------
 cfg = load_config()
 
-CNN_PATH  = cfg["MODEL_PATH_CNN"]   # now points to .tflite
+CNN_PATH  = cfg["MODEL_PATH_CNN"]   # .tflite
 TREE_PATH = cfg["MODEL_PATH_TREE"]
 IMG_SIZE  = cfg["IMG_SIZE"]
 CNN_THRESHOLD = cfg["CONF_THRESHOLD"]
@@ -28,7 +35,7 @@ tree   = bundle["model"]
 scaler = bundle["scaler"]
 
 # ======================================================
-# CNN INTENT ONLY (FP32 TFLite)
+# CNN INTENT ONLY
 # ======================================================
 def predict_intent(img):
     cnn_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -52,9 +59,30 @@ def predict_intent(img):
 
 
 # ======================================================
-# TREE PREDICTION (FEATURES ALREADY COMPUTED)
+# GEOMETRIC FINGER COUNT (MediaPipe landmarks)
 # ======================================================
-def predict_gesture_from_features(features):
+def count_extended_fingers(hand_landmarks):
+    """
+    Counts extended fingers using tip vs PIP joint geometry.
+    Thumb excluded (more robust).
+    """
+    # finger tips and PIP joints (index → pinky)
+    tips = [8, 12, 16, 20]
+    pips = [6, 10, 14, 18]
+
+    count = 0
+    for tip, pip in zip(tips, pips):
+        # y-axis: smaller is higher (finger up)
+        if hand_landmarks.landmark[tip].y < hand_landmarks.landmark[pip].y:
+            count += 1
+
+    return count
+
+
+# ======================================================
+# TREE PREDICTION + GEOMETRIC OVERRIDE
+# ======================================================
+def predict_gesture_from_features(features, hand_landmarks=None):
     if features is None:
         return "unknown", 0.0
 
@@ -69,5 +97,32 @@ def predict_gesture_from_features(features):
         gesture_conf = float(np.max(tree.predict_proba(X)))
     else:
         gesture_conf = 0.9
+
+    # ---------------- GEOMETRIC SANITY CHECK ----------------
+    if hand_landmarks is not None:
+        finger_count = count_extended_fingers(hand_landmarks)
+        print(finger_count)
+
+        # Fix: OPEN misclassified as TWO
+        if gesture_label == "two" and finger_count >= 4:
+            gesture_label = "open"
+            gesture_conf *= 0.8   # slightly penalize
+
+        # Optional: TWO misclassified as OPEN
+        elif gesture_label == "open" and finger_count == 2:
+            gesture_label = "two"
+            gesture_conf *= 0.8
+
+        # Optional: CLOSED sanity
+        elif gesture_label == "closed" and finger_count >= 3:
+            gesture_label = "open"
+            gesture_conf *= 0.7
+
+        if finger_count == 3:
+            gesture_label = "three"
+            gesture_conf = 0.7
+        elif finger_count == 1:
+            gesture_label = "one"
+            gesture_conf = 0.7
 
     return gesture_label, gesture_conf

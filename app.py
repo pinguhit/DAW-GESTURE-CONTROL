@@ -1,3 +1,9 @@
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    message="SymbolDatabase.GetPrototype() is deprecated"
+)
 import sys
 import time
 from PySide6.QtGui import QIcon
@@ -9,7 +15,6 @@ import mido
 
 from engine import EngineWorker
 from midi import init_midi, send_note, close_midi
-
 
 class GestureApp(QWidget):
     def __init__(self):
@@ -120,12 +125,14 @@ class GestureApp(QWidget):
         try:
             if gesture == "closed":
                 send_note(60)   # C4
-            elif gesture == "open":
-                send_note(62)   # D4
             elif gesture == "two":
                 send_note(64)   # E4
             elif gesture == "four":
                 send_note(67)   # G4
+            elif gesture == "one":
+                send_note(69)
+            elif gesture == "three":
+                send_note(71)
         except Exception as e:
             print("MIDI send error:", e)
 
@@ -137,7 +144,6 @@ class GestureApp(QWidget):
         if self.midi_initialized:
             close_midi()
             self.midi_initialized = False
-
     def on_worker_finished(self):
         self.worker = None
         self.status.setText("Idle")
@@ -148,3 +154,6 @@ if __name__ == "__main__":
     window = GestureApp()
     window.show()
     sys.exit(app.exec())
+
+
+### to debug - if one hand is nothing and other hand is a gesture the nothing hand is also fed into the tree

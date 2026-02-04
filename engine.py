@@ -1,3 +1,9 @@
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    message="SymbolDatabase.GetPrototype() is deprecated"
+)
 from PySide6.QtCore import QThread, Signal
 import cv2
 import mediapipe as mp
@@ -15,7 +21,9 @@ SMOOTHING_WINDOW = cfg["SMOOTHING_WINDOW"]
 ON_CONF = cfg["ON_THRES"]
 OFF_CONF = cfg["OFF_THRES"]
 PADDING_RATIO = 0.35
-COOLDOWN_SECONDS = 1.0
+COOLDOWN_SECONDS = 1.
+ARMED_SECONDS = 5
+ARMED_COOLDOWN = 3
 
 MP_SKIP = 2   # MediaPipe runs every N frames
 
@@ -26,16 +34,28 @@ class EngineWorker(QThread):
 
     def __init__(self, cam_number, orientation):
         super().__init__()
+        self.open_start_time = None
+        self.percent = 0
+        self.arm = False
         self.cam_number = cam_number
         self.orientation = orientation
         self.running = True
+        self.just_armed = False
+        self.cool_until_time = None
+
 
         self.label_window = deque(maxlen=SMOOTHING_WINDOW)
         self.last_trigger_time = 0.0
 
         self.frame_id = 0
         self.last_landmarks = None
-        self.prev_state = "NOTHING"   # FSM state
+
+        # USER-LEVEL FSM
+        self.prev_state = "NOTHING"
+
+        # per-hand signals (reset every frame)
+        self.hands_intent = [False, False]
+        self.per_hand_conf = [0.0, 0.0]
 
         self.mp_hands = mp.solutions.hands
         self.hands = self.mp_hands.Hands(
@@ -120,7 +140,7 @@ class EngineWorker(QThread):
             self.frame_id += 1
             frame = cv2.flip(frame, 1)
 
-            width, height = 640, 480
+            height,width = frame.shape[:2]
             roi_width, roi_height = width - 20, height - 20
 
             if self.orientation == "Portrait":
@@ -143,13 +163,19 @@ class EngineWorker(QThread):
                 else self.last_landmarks
             )
 
-            # ---------------- FRAME-LEVEL INTENT AGGREGATION ----------------
-            frame_has_intentional = False
-            frame_intentional_conf = 0.0
+            # ---------------- PER-FRAME INIT ----------------
             global_conf = 0.0
+            best_gesture = "unknown"
+            best_gesture_conf = 0.0
 
+            self.hands_intent = [False, False]
+            self.per_hand_conf = [0.0, 0.0]
+
+            # ================== LOOP 1: INTENT ==================
+            intent = None
             if landmarks_to_use:
-                for hl in landmarks_to_use:
+                for i, hl in enumerate(landmarks_to_use[:2]):
+
                     crop, bbox = self.extract_hand_crop(frame, hl)
                     if crop is None:
                         continue
@@ -162,10 +188,22 @@ class EngineWorker(QThread):
                     global_conf = max(global_conf, i_conf)
 
                     if intent == "intentional":
-                        frame_has_intentional = True
-                        frame_intentional_conf = max(frame_intentional_conf, i_conf)
+                        self.hands_intent[i] = True
+                        self.per_hand_conf[i] = i_conf
 
-            # ---------------- HYSTERESIS FSM ----------------
+            has_valid_hand = (
+                landmarks_to_use is not None
+                and len(landmarks_to_use) > 0
+                and intent == "intentional"
+            )
+
+
+            # ---------------- USER-LEVEL FSM ----------------
+            frame_has_intentional = any(self.hands_intent)
+            frame_intentional_conf = (
+                max(self.per_hand_conf) if frame_has_intentional else 0.0
+            )
+
             if self.prev_state == "NOTHING":
                 if frame_has_intentional and frame_intentional_conf >= ON_CONF:
                     self.prev_state = "INTENTIONAL"
@@ -174,12 +212,13 @@ class EngineWorker(QThread):
                 if (not frame_has_intentional) or frame_intentional_conf < OFF_CONF:
                     self.prev_state = "NOTHING"
 
-            # ---------------- TREE (ONLY IF INTENTIONAL) ----------------
-            best_gesture = "unknown"
-            best_gesture_conf = 0.0
-
+            # ================== LOOP 2: GESTURE ==================
             if self.prev_state == "INTENTIONAL" and landmarks_to_use:
-                for hl in landmarks_to_use:
+                for i, hl in enumerate(landmarks_to_use[:2]):
+
+                    if not self.hands_intent[i]:
+                        continue   # 🚫 guitar / idle hand blocked
+
                     crop, bbox = self.extract_hand_crop(frame, hl)
                     if crop is None:
                         continue
@@ -188,7 +227,8 @@ class EngineWorker(QThread):
                     if features is None:
                         continue
 
-                    gesture, g_conf = predict_gesture_from_features(features)
+                    gesture, g_conf = predict_gesture_from_features(features,hl)
+
                     if g_conf > best_gesture_conf:
                         best_gesture = gesture
                         best_gesture_conf = g_conf
@@ -216,6 +256,7 @@ class EngineWorker(QThread):
                 color,
                 2
             )
+            
 
             # ---------------- SMOOTHING ----------------
             if self.prev_state == "INTENTIONAL":
@@ -223,14 +264,82 @@ class EngineWorker(QThread):
             else:
                 self.label_window.clear()
 
+            if not has_valid_hand:
+                self.open_start_time = None
+            
+            now = time.time()
+            if self.just_armed:
+                    if (now - self.cool_until_time)>=ARMED_COOLDOWN:
+                        self.just_armed = False
+                    else:
+                        self.label_window.clear()
+                        
+
             if len(self.label_window) == SMOOTHING_WINDOW:
-                now = time.time()
-                if (now - self.last_trigger_time) >= COOLDOWN_SECONDS:
-                    self.gesture_signal.emit(self.get_smoothed_label())
+                final_gesture = self.get_smoothed_label()
+            
+                if final_gesture == "open":
+                    if self.open_start_time is None:
+                        self.open_start_time = now
+                    elif now - self.open_start_time >= ARMED_SECONDS:
+                        self.open_start_time = None
+                        self.arm = not self.arm
+                        self.label_window.clear()
+                        self.just_armed = True
+                        self.cool_until_time = now
+                    
+                        
+                else:
+                    self.open_start_time = None
+
+                if (now - self.last_trigger_time) >= COOLDOWN_SECONDS and self.arm and not self.just_armed:
+                    self.gesture_signal.emit(final_gesture)
                     self.last_trigger_time = now
                 self.label_window.clear()
+            
+            # ---- ARM HOLD PROGRESS UI ----
+            if self.just_armed:
+                cv2.putText(
+                    frame,
+                    f"COOLDOWN in Progress",
+                    (20, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1.0,
+                    (0, 255, 255),
+                    2
+                )
+                
+            elif self.open_start_time is not None :
+
+                if best_gesture == "open":
+                    hold_time = time.time() - self.open_start_time
+                    progress = min(hold_time / ARMED_SECONDS, 1.0)
+                    self.percent = int(progress * 100)
+
+                    cv2.putText(
+                        frame,
+                        f"ARMING: {self.percent}%",
+                        (20, 80),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1.0,
+                        (0, 255, 255),
+                        2
+                    )
+                else:
+                    self.percent = 0
+            else:
+                cv2.putText(
+                    frame,
+                    f"ARMED: {self.arm}",
+                    (20, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1.0,
+                    (0, 255, 0) if self.arm else (0, 0, 255),
+                    2
+                )
 
             cv2.imshow("Gesture Engine", frame)
+
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
 
