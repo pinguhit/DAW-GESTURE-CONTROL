@@ -2,6 +2,7 @@
 
 ## 📌 SUMMARY
 DAW-Gesture-Control is a vision-based system that allows musicians to control a DAW using hand gestures instead of physical MIDI controllers.
+Demo Video -> https://youtu.be/wbT2AZZo_jE
 
 ---
 
