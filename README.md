@@ -1,53 +1,76 @@
-# DAW-GESTURE-CONTROL
+# 🎛️ DAW-GESTURE-CONTROL
 
-## SUMMARY
-DAW-Gesture-Control is a vision-based system that allows musicians to control a DAW using hand gestures instead of physical MIDI controllers
+## 📌 SUMMARY
+DAW-Gesture-Control is a vision-based system that allows musicians to control a DAW using hand gestures instead of physical MIDI controllers.
 
-## DATASET
-Collected images of hand gestures specifically - two,four,closed,open hand,closed hand,nothing dataset.
-Two - hand displaying two
-Four - hand displaying four
-Closed - closed hand
-Open - open hand
-Noting - dataset containing gestures that are flagged as nothing by the CNN
+---
 
-## HARDWARE REQUIRED
-A laptop, an instrument, an interface, a working camera.
+## 📂 DATASET
+Collected images of hand gestures specifically:
+- **Two** – hand displaying two  
+- **Four** – hand displaying four  
+- **Closed** – closed hand  
+- **Open** – open hand  
+- **Nothing** – dataset containing gestures that are flagged as nothing by the CNN  
 
-## PIPELINE
-# CAMERA
+---
+
+## 🧰 HARDWARE REQUIRED
+- A laptop  
+- An instrument  
+- An interface  
+- A working camera  
+
+---
+
+## 🔁 PIPELINE
+
+### CAMERA
 A camera source is required to capture the frames.
 
-# MEDIAPIPE
-Mediapipe extracts a hand crop of the image along with the landmarks.
+### MEDIAPIPE
+MediaPipe extracts a hand crop of the image along with the landmarks.
 
-# INTENT-CONTROL CNN
-The cnn decides whether the gesture being performed by the musician is intentional or not. If it's intentional, then send the hand landmarks to a decision tree for gesture recognition.
+### INTENT-CONTROL CNN
+The CNN decides whether the gesture being performed by the musician is intentional or not.  
+If it's intentional, the hand landmarks are sent to a decision tree for gesture recognition.
 
-# DECISION TREE
+### DECISION TREE
 The decision tree decides what type of gesture it is.
 
-# GEOMETRICAL DECISIONS
-For the gestures of one and three, I am using geometry(hand landmarks from mediapipe) of the hand and a series of if-else conditions concerning the pip joint of the hand to identify the gesture and provide a secondary confidence measure of existing gesture.
+### GEOMETRICAL DECISIONS
+For the gestures of one and three, geometry (hand landmarks from MediaPipe) and a series of if-else conditions concerning the PIP joint of the hand are used to identify the gesture and provide a secondary confidence measure of the existing gesture.
 
-# MIDI OUTPUT
-The program generates midi output which is sent to a fake MIDI port generated with the help of loopMIDI. The loopMIDI port then sends the output to the DAW just like a MIDI controller would.
+### MIDI OUTPUT
+The program generates MIDI output which is sent to a fake MIDI port generated with the help of **loopMIDI**.  
+The loopMIDI port then sends the output to the DAW just like a MIDI controller would.
 
-## ADVANTAGES
-# IMPROVED WORFLOW
-With gestures, recording at home, switches patches,etc become a lot quicker.
-# FLEXIBILITY
-The gestures can be mapped to whatever you want as it essentially functions like a MIDI controller with gestures instead.
-# NO HARDWARE
-This project, if refined could potentially replace a pedal for live performances and all it needs is a camera, laptop and interface.
+---
 
-## LIMITATIONS AND FURTHER SCOPE
-# FPS
-Fps struggles as there's 4 levels of processing.
-# LIMITED GESTURES
-Currently there's only 5 gestures, as the open hand gesture is used for activating the gesture control system. For more gestures, a larger dataset is required. Furthermore, instead of just static gestures, dynamic gestures can also be added for increasing volume, panning, faders,etc.
+## ✅ ADVANTAGES
 
-## APPLICATIONS
-The project can be used in a studio or live environment for musicians to record, switch patches, and work with a daw with using hand gestures. Rather than continuosly pressing the record button while getting the perfect take, using hand gestures improve workflow. 
+### IMPROVED WORKFLOW
+With gestures, recording at home and switching patches become a lot quicker.
 
+### FLEXIBILITY
+The gestures can be mapped to whatever you want, as it essentially functions like a MIDI controller using gestures.
 
+### NO HARDWARE
+This project, if refined, could potentially replace a pedal for live performances and only requires a camera, laptop, and interface.
+
+---
+
+## ⚠️ LIMITATIONS AND FURTHER SCOPE
+
+### FPS
+FPS struggles as there are four levels of processing.
+
+### LIMITED GESTURES
+Currently there are only five gestures, as the open hand gesture is used for activating the gesture control system.  
+For more gestures, a larger dataset is required. Furthermore, instead of just static gestures, dynamic gestures can also be added for increasing volume, panning, faders, etc.
+
+---
+
+## 🎵 APPLICATIONS
+The project can be used in a studio or live environment for musicians to record, switch patches, and work with a DAW using hand gestures.  
+Rather than continuously pressing the record button while getting the perfect take, using hand gestures improves workflow.
